@@ -23,8 +23,8 @@ const Dashboard = () => {
     <div className="space-y-8">
       <h1 className="text-4xl font-black">Account Dashboard</h1>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Sweeps Coins</p><p className="mt-2 text-3xl font-black text-gold">💜 {user?.sweepsCoins.toFixed(2) ?? '0.00'}</p></div>
-        <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Gold Coins</p><p className="mt-2 text-3xl font-black text-gold">🟡 {user?.goldCoins.toFixed(2) ?? '0.00'}</p></div>
+        <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Sweeps Coins</p><p className="mt-2 text-3xl font-black text-gold">💜 {user ? user.sweepsCoins.toFixed(2) : '0.00'}</p></div>
+        <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Gold Coins</p><p className="mt-2 text-3xl font-black text-gold">🟡 {user ? user.goldCoins.toFixed(2) : '0.00'}</p></div>
         <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Total Wins</p><p className="mt-2 text-3xl font-black">${stats.totalWins.toFixed(2)}</p></div>
         <div className="glass-card rounded-3xl p-5"><p className="text-white/60">Win Rate</p><p className="mt-2 text-3xl font-black">{stats.winRate}%</p></div>
       </div>

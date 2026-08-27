@@ -8,6 +8,7 @@ const Footer = () => (
         <p className="mt-3 max-w-xl text-sm text-white/70">Fast, polished sweepstakes gameplay with gold coins, sweeps coins, live leaderboards, and Cash App-ready checkout flows.</p>
       </div>
       <div className="grid grid-cols-2 gap-4 text-sm text-white/70">
+        <Link to="/">About</Link>
         <Link to="/terms">Terms</Link>
         <Link to="/responsible-gaming">Responsible Gaming</Link>
         <a href="mailto:support@spinout.app">Contact</a>

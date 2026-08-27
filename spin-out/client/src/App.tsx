@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import AuthModal from './components/AuthModal';
 import Footer from './components/ui/Footer';
@@ -19,7 +20,7 @@ import Terms from './pages/Terms';
 import { useAuthStore } from './store/authStore';
 import { useUiStore } from './store/uiStore';
 
-const ProtectedRoute = ({ children, adminOnly = false }: { children: JSX.Element; adminOnly?: boolean }) => {
+const ProtectedRoute = ({ children, adminOnly = false }: { children: ReactElement; adminOnly?: boolean }) => {
   const { isAuthenticated, user } = useAuthStore();
   if (!isAuthenticated) return <Navigate to="/" replace />;
   if (adminOnly && user?.role !== 'admin') return <Navigate to="/dashboard" replace />;

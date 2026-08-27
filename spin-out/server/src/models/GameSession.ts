@@ -22,7 +22,7 @@ export class GameSessionModel {
     outcome: string;
     winAmount: number;
     provableSeed?: string;
-    metadata?: Record<string, unknown>;
+    metadata?: unknown;
   }): Promise<GameSession> {
     const result = await query(
       `INSERT INTO game_sessions (user_id, game_type, bet_amount, currency, outcome, win_amount, provable_seed, metadata)

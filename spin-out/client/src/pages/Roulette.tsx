@@ -8,10 +8,11 @@ const chips = [1, 5, 10, 25, 100];
 const numbers = Array.from({ length: 37 }, (_, index) => index);
 
 const Roulette = () => {
-  const { spinRoulette, validateBet } = useGame();
+  const { spinRoulette, validateBet, setBet } = useGame();
   const addToast = useUiStore((state) => state.addToast);
   const [chip, setChip] = useState(5);
   const [selected, setSelected] = useState<number[]>([]);
+  const [specialBet, setSpecialBet] = useState<'red' | 'black' | 'even' | 'odd' | null>(null);
   const [spinning, setSpinning] = useState(false);
   const [history, setHistory] = useState<number[]>([]);
   const [result, setResult] = useState<any>(null);
@@ -19,14 +20,18 @@ const Roulette = () => {
   const toggleNumber = (value: number) => setSelected((state) => state.includes(value) ? state.filter((item) => item !== value) : [...state, value]);
 
   const onSpin = async () => {
-    if (selected.length === 0) {
+    if (selected.length === 0 && !specialBet) {
       addToast({ type: 'error', message: 'Select at least one number or special bet.' });
       return;
     }
+    setBet(chip);
     if (!validateBet()) return;
     setSpinning(true);
     try {
-      const response = await spinRoulette([{ type: 'straight', numbers: selected, amount: chip }]);
+      const bets = selected.length > 0
+        ? [{ type: 'straight', numbers: selected, amount: chip }]
+        : [{ type: specialBet, amount: chip }];
+      const response = await spinRoulette(bets);
       setResult(response);
       setHistory((state) => [response.number, ...state].slice(0, 10));
     } catch (error: any) {
@@ -43,7 +48,7 @@ const Roulette = () => {
         <div className="glass-card rounded-3xl p-6 text-center">
           <RouletteWheel spinning={spinning} result={result?.number} />
           <div className="mt-6 flex flex-wrap justify-center gap-2">
-            {chips.map((value) => <button key={value} onClick={() => setChip(value)} className={`rounded-full px-4 py-2 ${chip === value ? 'bg-gold text-background' : 'bg-white/5'}`}>${value}</button>)}
+            {chips.map((value) => <button key={value} onClick={() => { setChip(value); setBet(value); }} className={`rounded-full px-4 py-2 ${chip === value ? 'bg-gold text-background' : 'bg-white/5'}`}>${value}</button>)}
           </div>
           <Button className="mt-6 w-full" loading={spinning} onClick={onSpin}>Spin Wheel</Button>
           <div className="mt-5 flex justify-center gap-2">
@@ -52,6 +57,13 @@ const Roulette = () => {
         </div>
         <div className="glass-card rounded-3xl p-6">
           <p className="mb-4 text-white/70">Pick straight-up numbers. Selected numbers are included in the single spin wager.</p>
+          <div className="mb-4 flex flex-wrap gap-2">
+            {(['red', 'black', 'even', 'odd'] as const).map((option) => (
+              <button key={option} onClick={() => setSpecialBet(option)} className={`rounded-full px-4 py-2 capitalize ${specialBet === option ? 'bg-primary' : 'bg-white/5'}`}>
+                {option}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:grid-cols-9">
             {numbers.map((number) => <button key={number} onClick={() => toggleNumber(number)} className={`rounded-xl px-4 py-3 font-semibold ${selected.includes(number) ? 'bg-primary text-white' : 'bg-white/5'}`}>{number}</button>)}
           </div>

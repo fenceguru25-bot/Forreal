@@ -31,7 +31,7 @@ router.put('/user/:id/balance', validate(z.object({
   query: z.object({})
 })), async (req, res, next) => {
   try {
-    const user = await creditBalance(req.params.id, req.body.scAmount, req.body.gcAmount);
+    const user = await creditBalance(String(req.params.id), req.body.scAmount, req.body.gcAmount);
     res.json({ success: true, data: user });
   } catch (error) {
     next(error);

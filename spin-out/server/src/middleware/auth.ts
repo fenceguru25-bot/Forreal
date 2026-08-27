@@ -1,8 +1,8 @@
-import type { NextFunction, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import type { JwtPayload } from '../../../shared/src/types';
 import { verifyJWT } from '../services/authService';
 
-export interface AuthenticatedRequest extends Express.Request {
+export interface AuthenticatedRequest extends Request {
   user?: JwtPayload;
 }
 

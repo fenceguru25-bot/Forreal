@@ -44,7 +44,7 @@ const Cashier = () => {
         </div>
         <div className="rounded-2xl bg-white/5 px-4 py-3 text-right text-sm">
           <div>Player: {user?.username}</div>
-          <div>💜 {user?.sweepsCoins.toFixed(2) ?? '0.00'} SC</div>
+          <div>💜 {user ? user.sweepsCoins.toFixed(2) : '0.00'} SC</div>
         </div>
       </div>
       <div className="flex gap-2">
@@ -60,7 +60,7 @@ const Cashier = () => {
           <h2 className="text-2xl font-bold">Redeem Sweeps Coins</h2>
           <p className="mt-3 text-white/70">Eligible prize redemption requests are manually reviewed. Contact support after reaching the applicable threshold.</p>
           <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl bg-white/5 p-4"><p className="text-white/60">Available SC</p><p className="mt-2 text-3xl font-black text-gold">{user?.sweepsCoins.toFixed(2) ?? '0.00'}</p></div>
+            <div className="rounded-2xl bg-white/5 p-4"><p className="text-white/60">Available SC</p><p className="mt-2 text-3xl font-black text-gold">{user ? user.sweepsCoins.toFixed(2) : '0.00'}</p></div>
             <div className="rounded-2xl bg-white/5 p-4"><p className="text-white/60">Review Window</p><p className="mt-2 text-3xl font-black">24h</p></div>
             <div className="rounded-2xl bg-white/5 p-4"><p className="text-white/60">Payout Type</p><p className="mt-2 text-3xl font-black">Cash App</p></div>
           </div>

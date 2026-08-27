@@ -31,7 +31,7 @@ app.use(cors({ origin: process.env.CLIENT_URL ?? 'http://localhost:5173', creden
 app.use(morgan('dev'));
 app.use(express.json({
   verify: (req, _res, buffer) => {
-    req.rawBody = buffer.toString();
+    (req as Express.Request).rawBody = buffer.toString();
   }
 }));
 app.use(generalLimiter);
