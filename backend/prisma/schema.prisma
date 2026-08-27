@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String           @id @default(uuid())
+  email              String           @unique
+  passwordHash       String
+  firstName          String
+  lastName           String
+  dateOfBirth        DateTime
+  state              String
+  kycStatus          KycStatus        @default(PENDING)
+  accountTier        AccountTier      @default(STANDARD)
+  emailVerified      Boolean          @default(false)
+  verifyToken        String?
+  isSelfExcluded     Boolean          @default(false)
+  selfExcludedUntil  DateTime?
+  depositLimit       Float?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  wallet             Wallet?
+  transactions       Transaction[]
+  promotionClaims    PromotionClaim[]
+  amoeEntries        AmoeEntry[]
+}
+
+enum KycStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+enum AccountTier {
+  GUEST
+  STANDARD
+  VERIFIED
+  VIP
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+  gcBalance Float    @default(0)
+  scBalance Float    @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  type        TransactionType
+  currency    CurrencyType
+  amount      Float
+  description String
+  createdAt   DateTime        @default(now())
+}
+
+enum TransactionType {
+  DEPOSIT
+  BONUS
+  GAME_WIN
+  GAME_BET
+  REDEMPTION
+  AMOE_AWARD
+}
+
+enum CurrencyType {
+  GC
+  SC
+}
+
+model Game {
+  id        String       @id @default(uuid())
+  name      String
+  provider  String
+  category  GameCategory
+  imageUrl  String
+  isActive  Boolean      @default(true)
+  minBetGc  Float        @default(0.1)
+  minBetSc  Float        @default(0.01)
+  rtp       Float
+  createdAt DateTime     @default(now())
+}
+
+enum GameCategory {
+  SLOTS
+  BLACKJACK
+  ROULETTE
+  POKER
+  LIVE_DEALER
+}
+
+model Promotion {
+  id          String           @id @default(uuid())
+  name        String
+  description String
+  type        PromotionType
+  gcAmount    Float            @default(0)
+  scAmount    Float            @default(0)
+  isActive    Boolean          @default(true)
+  maxClaims   Int?
+  claimCount  Int              @default(0)
+  expiresAt   DateTime?
+  createdAt   DateTime         @default(now())
+  claims      PromotionClaim[]
+}
+
+enum PromotionType {
+  WELCOME_BONUS
+  DAILY_LOGIN
+  REFERRAL
+  MAIL_IN
+}
+
+model PromotionClaim {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  promotionId String
+  promotion   Promotion @relation(fields: [promotionId], references: [id])
+  claimedAt   DateTime  @default(now())
+}
+
+model AmoeEntry {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  firstName   String
+  lastName    String
+  email       String
+  address     String
+  city        String
+  state       String
+  zip         String
+  processedAt DateTime?
+  scAwarded   Float    @default(0)
+  createdAt   DateTime @default(now())
+}
