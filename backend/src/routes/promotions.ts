@@ -6,10 +6,13 @@ import prisma from '../config/database';
 import { verifyToken } from '../config/jwt';
 import { auth } from '../middleware/auth';
 import { geoblock } from '../middleware/geoblock';
+import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
+const protectedRateLimit = createRateLimit({ windowMs: 60_000, max: 40 });
+const amoeRateLimit = createRateLimit({ windowMs: 60_000, max: 10 });
 
-router.get('/', auth, geoblock, async (_req, res) => {
+router.get('/', protectedRateLimit, auth, geoblock, async (_req, res) => {
   try {
     const promotions = await prisma.promotion.findMany({
       where: {
@@ -26,7 +29,7 @@ router.get('/', auth, geoblock, async (_req, res) => {
   }
 });
 
-router.post('/claim/:id', auth, geoblock, async (req, res) => {
+router.post('/claim/:id', protectedRateLimit, auth, geoblock, async (req, res) => {
   try {
     const result = await prisma.$transaction(async (tx: TransactionClient) => {
       const promotion = await tx.promotion.findUnique({ where: { id: req.params.id } });
@@ -116,6 +119,7 @@ router.post('/claim/:id', auth, geoblock, async (req, res) => {
 
 router.post(
   '/amoe',
+  amoeRateLimit,
   geoblock,
   [
     body('firstName').trim().isLength({ min: 2 }).withMessage('First name is required'),

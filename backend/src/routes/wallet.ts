@@ -3,10 +3,11 @@ import { Router } from 'express';
 import prisma from '../config/database';
 import { auth } from '../middleware/auth';
 import { geoblock } from '../middleware/geoblock';
+import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 
-router.use(auth, geoblock);
+router.use(createRateLimit({ windowMs: 60_000, max: 60 }), auth, geoblock);
 
 router.get('/balance', async (req, res) => {
   try {

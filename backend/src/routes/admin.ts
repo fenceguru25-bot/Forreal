@@ -3,10 +3,11 @@ import { Router } from 'express';
 import prisma from '../config/database';
 import { adminAuth } from '../middleware/adminAuth';
 import { auth } from '../middleware/auth';
+import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 
-router.use(auth, adminAuth);
+router.use(createRateLimit({ windowMs: 60_000, max: 30 }), auth, adminAuth);
 
 router.get('/players', async (req, res) => {
   try {
