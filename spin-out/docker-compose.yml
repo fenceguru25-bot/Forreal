@@ -1,0 +1,49 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: spinout
+      POSTGRES_USER: spinout
+      POSTGRES_PASSWORD: spinout123
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: ******postgres:5432/spinout
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRES_IN: 15m
+      REFRESH_TOKEN_SECRET: your-refresh-secret-change-in-production
+      CASHAPP_WEBHOOK_SECRET: your-cashapp-webhook-secret
+      PORT: 4000
+      CLIENT_URL: http://localhost:5173
+      NODE_ENV: development
+    ports:
+      - '4000:4000'
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    depends_on:
+      - server
+    ports:
+      - '5173:5173'
+
+volumes:
+  postgres_data:
