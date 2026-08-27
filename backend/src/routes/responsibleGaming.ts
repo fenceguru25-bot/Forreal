@@ -1,14 +1,20 @@
 import { Request, Response, Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
 
 import prisma from '../config/database';
 import { auth } from '../middleware/auth';
-import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 const allowedPeriods = ['30', '60', '90', '180', '365', 'permanent'];
+const responsibleGamingRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
 
-router.use(createRateLimit({ windowMs: 60_000, max: 20 }), auth);
+router.use(responsibleGamingRateLimit, auth);
 
 router.post(
   '/self-exclude',

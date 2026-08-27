@@ -1,16 +1,26 @@
 import type { TransactionClient } from '@prisma/client';
 import { Request, Response, Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
 
 import prisma from '../config/database';
 import { verifyToken } from '../config/jwt';
 import { auth } from '../middleware/auth';
 import { geoblock } from '../middleware/geoblock';
-import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
-const protectedRateLimit = createRateLimit({ windowMs: 60_000, max: 40 });
-const amoeRateLimit = createRateLimit({ windowMs: 60_000, max: 10 });
+const protectedRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 40,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+const amoeRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
 
 router.get('/', protectedRateLimit, auth, geoblock, async (_req, res) => {
   try {

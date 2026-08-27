@@ -1,13 +1,19 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 
 import prisma from '../config/database';
 import { auth } from '../middleware/auth';
 import { geoblock } from '../middleware/geoblock';
-import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
+const walletRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
 
-router.use(createRateLimit({ windowMs: 60_000, max: 60 }), auth, geoblock);
+router.use(walletRateLimit, auth, geoblock);
 
 router.get('/balance', async (req, res) => {
   try {

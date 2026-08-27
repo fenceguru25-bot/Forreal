@@ -1,13 +1,19 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 
 import prisma from '../config/database';
 import { adminAuth } from '../middleware/adminAuth';
 import { auth } from '../middleware/auth';
-import { createRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
+const adminRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
 
-router.use(createRateLimit({ windowMs: 60_000, max: 30 }), auth, adminAuth);
+router.use(adminRateLimit, auth, adminAuth);
 
 router.get('/players', async (req, res) => {
   try {
