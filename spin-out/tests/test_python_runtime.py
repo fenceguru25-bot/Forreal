@@ -46,6 +46,21 @@ class PythonRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payment["metadata"]["amount"], 99.99)
         self.assertEqual(payment["metadata"]["requestedAmount"], 0.01)
 
+    async def test_gc_slot_spin_debits_gold_balance(self) -> None:
+        auth_user = python_runtime.AuthUser(user_id=self.user_id, email="tester@example.com", role="player")
+        fixed_result = {"reels": [], "paylines": [], "winAmount": 0.0, "freeSpins": 0, "multiplier": 0}
+
+        with patch.object(python_runtime, "spin_slots", return_value=fixed_result):
+            await python_runtime.slot_spin(
+                python_runtime.SlotsSpinRequest(bet=1, currency="GC", clientSeed="seed123", nonce=0),
+                auth_user,
+            )
+
+        user = python_runtime.find_user_by_id(self.user_id)
+        self.assertIsNotNone(user)
+        self.assertEqual(user["sweepsCoins"], 2.0)
+        self.assertEqual(user["goldCoins"], 499.0)
+
 
 if __name__ == "__main__":
     unittest.main()

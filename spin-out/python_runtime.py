@@ -777,6 +777,10 @@ def update_user_balance(user_id: str, sweeps_delta: float, gold_delta: float) ->
     return user
 
 
+def wallet_deltas(currency: Literal["SC", "GC"], amount: float) -> tuple[float, float]:
+    return (amount, 0.0) if currency == "SC" else (0.0, amount)
+
+
 def update_profile(user_id: str, username: str | None, avatar_url: str | None) -> dict[str, Any]:
     with db_connection() as connection:
         current = connection.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
@@ -1072,7 +1076,7 @@ async def settle_blackjack_action(user_id: str, action: Literal["hit", "stand", 
     elif action == "stand":
         result = blackjack_stand(state, game["deck"])
     else:
-        update_user_balance(user_id, -state["bet"] if game["currency"] == "SC" else 0, -state["bet"] if game["currency"] == "GC" else 0)
+        update_user_balance(user_id, *wallet_deltas(game["currency"], -state["bet"]))
         result = blackjack_double(state, game["deck"])
 
     payout = calculate_blackjack_payout(result["state"])
@@ -1080,7 +1084,7 @@ async def settle_blackjack_action(user_id: str, action: Literal["hit", "stand", 
     if result["state"]["status"] != "playing":
         delete_blackjack_game(user_id)
         if payout > 0:
-            update_user_balance(user_id, payout if game["currency"] == "SC" else 0, payout if game["currency"] == "GC" else 0)
+            update_user_balance(user_id, *wallet_deltas(game["currency"], payout))
             if profile:
                 await record_win(profile["id"], profile["username"], max(0.0, round(payout - result["state"]["bet"], 2)))
         create_game_session(user_id, "blackjack", result["state"]["bet"], game["currency"], result["state"]["status"], payout, metadata=result["state"])
@@ -1278,11 +1282,11 @@ async def slot_spin(payload: SlotsSpinRequest, user: AuthUser = Depends(require_
     profile = find_user_by_id(user.user_id)
     if not profile or profile["selfExcluded"]:
         raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
-    update_user_balance(profile["id"], -payload.bet if payload.currency == "SC" else 0, -payload.bet if payload.currency == "GC" else 0)
+    update_user_balance(profile["id"], *wallet_deltas(payload.currency, -payload.bet))
     server_seed = generate_server_seed()
     result = spin_slots(payload.bet, server_seed, payload.clientSeed, payload.nonce)
     if result["winAmount"] > 0:
-        update_user_balance(profile["id"], result["winAmount"] if payload.currency == "SC" else 0, result["winAmount"] if payload.currency == "GC" else 0)
+        update_user_balance(profile["id"], *wallet_deltas(payload.currency, result["winAmount"]))
         await record_win(profile["id"], profile["username"], max(0.0, round(result["winAmount"] - payload.bet, 2)))
     record_transaction(profile["id"], "win" if result["winAmount"] > 0 else "loss", result["winAmount"] if result["winAmount"] > 0 else payload.bet, payload.currency, {"game": "slots", "clientSeed": payload.clientSeed, "nonce": payload.nonce, "paylines": result["paylines"]})
     session = create_game_session(profile["id"], "slot", payload.bet, payload.currency, "win" if result["winAmount"] > 0 else "loss", result["winAmount"], server_seed, result)
@@ -1294,12 +1298,12 @@ async def blackjack_start(payload: BlackjackStartRequest, user: AuthUser = Depen
     profile = find_user_by_id(user.user_id)
     if not profile or profile["selfExcluded"]:
         raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
-    update_user_balance(profile["id"], -payload.bet if payload.currency == "SC" else 0, -payload.bet if payload.currency == "GC" else 0)
+    update_user_balance(profile["id"], *wallet_deltas(payload.currency, -payload.bet))
     game = start_blackjack_game(payload.bet)
     if game["state"]["status"] != "playing":
         payout = calculate_blackjack_payout(game["state"])
         if payout > 0:
-            update_user_balance(profile["id"], payout if payload.currency == "SC" else 0, payout if payload.currency == "GC" else 0)
+            update_user_balance(profile["id"], *wallet_deltas(payload.currency, payout))
             await record_win(profile["id"], profile["username"], max(0.0, round(payout - game["state"]["bet"], 2)))
         create_game_session(profile["id"], "blackjack", game["state"]["bet"], payload.currency, game["state"]["status"], payout, metadata=game["state"])
         record_transaction(profile["id"], "win" if payout > game["state"]["bet"] else "loss", payout if payout > 0 else game["state"]["bet"], payload.currency, {"game": "blackjack", "status": game["state"]["status"]})
@@ -1321,10 +1325,10 @@ async def roulette_spin(payload: RouletteSpinRequest, user: AuthUser = Depends(r
         raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
     bets = [bet.model_dump() for bet in payload.bets]
     total_bet = round(sum(float(bet["amount"]) for bet in bets), 2)
-    update_user_balance(profile["id"], -total_bet if payload.currency == "SC" else 0, -total_bet if payload.currency == "GC" else 0)
+    update_user_balance(profile["id"], *wallet_deltas(payload.currency, -total_bet))
     result = spin_roulette(bets)
     if result["winAmount"] > 0:
-        update_user_balance(profile["id"], result["winAmount"] if payload.currency == "SC" else 0, result["winAmount"] if payload.currency == "GC" else 0)
+        update_user_balance(profile["id"], *wallet_deltas(payload.currency, result["winAmount"]))
         await record_win(profile["id"], profile["username"], max(0.0, round(result["winAmount"] - total_bet, 2)))
     create_game_session(profile["id"], "roulette", total_bet, payload.currency, "win" if result["win"] else "loss", result["winAmount"], metadata={"bets": bets, "result": result})
     record_transaction(profile["id"], "win" if result["win"] else "loss", result["winAmount"] if result["win"] else total_bet, payload.currency, {"game": "roulette"})
@@ -1336,11 +1340,11 @@ async def baccarat_deal(payload: BaccaratDealRequest, user: AuthUser = Depends(r
     profile = find_user_by_id(user.user_id)
     if not profile or profile["selfExcluded"]:
         raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
-    update_user_balance(profile["id"], -payload.amount if payload.currency == "SC" else 0, -payload.amount if payload.currency == "GC" else 0)
+    update_user_balance(profile["id"], *wallet_deltas(payload.currency, -payload.amount))
     result = deal_baccarat()
     payout = calculate_baccarat_payout(payload.bet, result["winner"], payload.amount)
     if payout > 0:
-        update_user_balance(profile["id"], payout if payload.currency == "SC" else 0, payout if payload.currency == "GC" else 0)
+        update_user_balance(profile["id"], *wallet_deltas(payload.currency, payout))
         await record_win(profile["id"], profile["username"], max(0.0, round(payout - payload.amount, 2)))
     create_game_session(profile["id"], "baccarat", payload.amount, payload.currency, result["winner"], payout, metadata=result)
     record_transaction(profile["id"], "win" if payout > 0 else "loss", payout if payout > 0 else payload.amount, payload.currency, {"game": "baccarat", "winner": result["winner"], "bet": payload.bet})
