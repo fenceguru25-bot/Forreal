@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { io, type Socket } from 'socket.io-client';
+import { io, type Socket } from 'socket.io-client/dist/socket.io.js';
 import { useAuthStore } from '../store/authStore';
 
 export const useSocket = () => {

@@ -25,7 +25,9 @@ const socketCorsOptions: CorsOptions = {
   origin: clientOrigin,
   credentials: true
 };
-const io = new Server(server, { cors: socketCorsOptions } as ConstructorParameters<typeof Server>[1]);
+type SocketServerOptions = NonNullable<ConstructorParameters<typeof Server>[1]> & { cors?: CorsOptions };
+const socketServerOptions: SocketServerOptions = { cors: socketCorsOptions };
+const io = new Server(server, socketServerOptions);
 
 app.use(helmet());
 app.use(cors(socketCorsOptions));
