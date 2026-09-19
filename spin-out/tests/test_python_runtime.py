@@ -39,6 +39,8 @@ class PythonRuntimeTests(unittest.IsolatedAsyncioTestCase):
         payment = python_runtime.create_payment_request(self.user_id, "diamond", 0.01)
         self.assertTrue(payment["paymentUrl"].endswith("/99.99"))
         self.assertEqual(payment["metadata"]["packageId"], "diamond")
+        self.assertEqual(payment["metadata"]["amount"], 99.99)
+        self.assertEqual(payment["metadata"]["requestedAmount"], 0.01)
 
 
 if __name__ == "__main__":

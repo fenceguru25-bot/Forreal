@@ -21,7 +21,7 @@ import socketio
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1018,7 +1018,7 @@ def create_payment_request(user_id: str, package_id: str, amount: float) -> dict
     return {
         "paymentUrl": f"https://cash.app/{CASHAPP_CASHTAG}/{float(package['price']):.2f}",
         "requestId": str(uuid4()),
-        "metadata": {"userId": user_id, "packageId": package_id, "requestedAmount": amount},
+        "metadata": {"userId": user_id, "packageId": package_id, "amount": float(package["price"]), "requestedAmount": amount},
     }
 
 
@@ -1269,7 +1269,7 @@ async def slot_spin(payload: SlotsSpinRequest, user: AuthUser = Depends(require_
     result = spin_slots(payload.bet, server_seed, payload.clientSeed, payload.nonce)
     if result["winAmount"] > 0:
         update_user_balance(profile["id"], result["winAmount"] if payload.currency == "SC" else 0, result["winAmount"] if payload.currency == "GC" else 0)
-        await record_win(profile["id"], profile["username"], result["winAmount"])
+        await record_win(profile["id"], profile["username"], max(0.0, round(result["winAmount"] - payload.bet, 2)))
     record_transaction(profile["id"], "win" if result["winAmount"] > 0 else "loss", result["winAmount"] if result["winAmount"] > 0 else payload.bet, payload.currency, {"game": "slots", "clientSeed": payload.clientSeed, "nonce": payload.nonce, "paylines": result["paylines"]})
     session = create_game_session(profile["id"], "slot", payload.bet, payload.currency, "win" if result["winAmount"] > 0 else "loss", result["winAmount"], server_seed, result)
     return {"success": True, "data": {"result": result, "session": session}}
@@ -1455,7 +1455,7 @@ async def leaderboard_subscribe(sid: str) -> None:
 
 
 @app.get("/", include_in_schema=False, response_model=None)
-async def root_index():
+async def root_index() -> Response:
     index_file = STATIC_FILE_INDEX.get("index.html")
     if index_file and index_file.exists():
         return FileResponse(index_file)
@@ -1463,7 +1463,8 @@ async def root_index():
 
 
 @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
-async def spa_assets(full_path: str):
+async def spa_assets(full_path: str) -> Response:
+    """Serve bundled frontend assets and fall back to index.html for safe SPA routes only."""
     parts = Path(full_path).parts
     top_level = parts[0] if parts else ""
     if top_level in {"api", "socket.io", "health"}:
