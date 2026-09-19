@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sys
 import hashlib
 import hmac
 import json
@@ -430,6 +431,7 @@ def start_blackjack_game(bet: float) -> dict[str, Any]:
         "dealerScore": calculate_blackjack_score(dealer_hand),
         "status": "playing",
         "bet": bet,
+        "canDouble": True,
     }
     if state["playerScore"] == 21 or state["dealerScore"] == 21:
         return {"state": determine_blackjack_winner(state), "deck": deck}
@@ -439,7 +441,7 @@ def start_blackjack_game(bet: float) -> dict[str, Any]:
 def blackjack_hit(state: dict[str, Any], deck: list[dict[str, Any]]) -> dict[str, Any]:
     card, remaining_deck = deal_card(deck)
     player_hand = [*state["playerHand"], card]
-    updated_state = {**state, "playerHand": player_hand, "playerScore": calculate_blackjack_score(player_hand)}
+    updated_state = {**state, "playerHand": player_hand, "playerScore": calculate_blackjack_score(player_hand), "canDouble": False}
     if updated_state["playerScore"] > 21:
         updated_state = determine_blackjack_winner(updated_state)
     return {"state": updated_state, "deck": remaining_deck}
@@ -455,12 +457,13 @@ def blackjack_stand(state: dict[str, Any], deck: list[dict[str, Any]]) -> dict[s
         **state,
         "dealerHand": dealer_hand,
         "dealerScore": calculate_blackjack_score(dealer_hand),
+        "canDouble": False,
     }
     return {"state": determine_blackjack_winner(updated), "deck": current_deck}
 
 
 def blackjack_double(state: dict[str, Any], deck: list[dict[str, Any]]) -> dict[str, Any]:
-    doubled_state = {**state, "bet": round(state["bet"] * 2, 2)}
+    doubled_state = {**state, "bet": round(state["bet"] * 2, 2), "canDouble": False}
     hit_result = blackjack_hit(doubled_state, deck)
     if hit_result["state"]["status"] == "playing":
         return blackjack_stand(hit_result["state"], hit_result["deck"])
@@ -964,16 +967,29 @@ def leaderboard(period: Literal["daily", "weekly"]) -> list[dict[str, Any]]:
 
 def claim_daily_bonus(user_id: str) -> dict[str, Any]:
     with db_connection() as connection:
-        row = connection.execute("SELECT last_daily_bonus_at FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+        row = connection.execute("SELECT sweeps_coins, last_daily_bonus_at FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
         if not row:
             raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
         last_claimed = parse_iso(row["last_daily_bonus_at"])
         if last_claimed and now_utc() - last_claimed < timedelta(hours=24):
             raise AppError("Daily bonus already claimed in the last 24 hours.")
-        connection.execute("UPDATE users SET last_daily_bonus_at = ?, updated_at = ? WHERE id = ?", (now_iso(), now_iso(), user_id))
-    user = update_user_balance(user_id, DAILY_BONUS_SC, 0)
-    record_transaction(user_id, "daily_bonus", DAILY_BONUS_SC, "SC", {"source": "daily_bonus"})
-    return user
+        timestamp = now_iso()
+        updated_sweeps = round(float(row["sweeps_coins"]) + DAILY_BONUS_SC, 2)
+        connection.execute(
+            "UPDATE users SET sweeps_coins = ?, last_daily_bonus_at = ?, updated_at = ? WHERE id = ?",
+            (updated_sweeps, timestamp, timestamp, user_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO transactions (id, user_id, type, amount, currency, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid4()), user_id, "daily_bonus", DAILY_BONUS_SC, "SC", json_data({"source": "daily_bonus"}), timestamp),
+        )
+        row = connection.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+    if not row:
+        raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
+    return row_to_user(row)
 
 
 def create_payment_request(user_id: str, package_id: str, amount: float) -> dict[str, Any]:
@@ -1002,6 +1018,40 @@ def process_payment(user_id: str, package_id: str) -> dict[str, Any]:
         {"packageId": package_id, "goldCoins": package["goldCoins"], "sweepsCoins": package["sweepsCoins"]},
     )
     return user
+
+
+async def settle_blackjack_action(user_id: str, action: Literal["hit", "stand", "double"]) -> dict[str, Any]:
+    game = load_blackjack_game(user_id)
+    if not game:
+        raise AppError("No blackjack game in progress.", status.HTTP_404_NOT_FOUND)
+    state = game["state"]
+    if state.get("status") != "playing":
+        delete_blackjack_game(user_id)
+        raise AppError("No blackjack game in progress.", status.HTTP_404_NOT_FOUND)
+    if action == "double" and not state.get("canDouble", False):
+        raise AppError("Double is only available before taking another action.")
+
+    if action == "hit":
+        result = blackjack_hit(state, game["deck"])
+    elif action == "stand":
+        result = blackjack_stand(state, game["deck"])
+    else:
+        update_user_balance(user_id, -state["bet"] if game["currency"] == "SC" else 0, -state["bet"] if game["currency"] == "GC" else 0)
+        result = blackjack_double(state, game["deck"])
+
+    payout = calculate_blackjack_payout(result["state"])
+    profile = find_user_by_id(user_id)
+    if result["state"]["status"] != "playing":
+        delete_blackjack_game(user_id)
+        if payout > 0:
+            update_user_balance(user_id, payout if game["currency"] == "SC" else 0, payout if game["currency"] == "GC" else 0)
+            if profile:
+                await record_win(profile["id"], profile["username"], max(0.0, round(payout - result["state"]["bet"], 2)))
+        create_game_session(user_id, "blackjack", result["state"]["bet"], game["currency"], result["state"]["status"], payout, metadata=result["state"])
+        record_transaction(user_id, "win" if payout > result["state"]["bet"] else "loss", payout if payout > 0 else result["state"]["bet"], game["currency"], {"game": "blackjack", "status": result["state"]["status"]})
+    else:
+        save_blackjack_game(user_id, result["state"], result["deck"], game["currency"])
+    return {"currency": game["currency"], "state": result["state"], "payout": payout}
 
 
 def auth_from_header(authorization: str | None) -> AuthUser:
@@ -1052,7 +1102,8 @@ async def http_error_handler(_request: Request, error: HTTPException) -> JSONRes
 
 @app.exception_handler(Exception)
 async def unexpected_error_handler(_request: Request, error: Exception) -> JSONResponse:
-    return JSONResponse(status_code=500, content={"success": False, "error": str(error) or "Internal server error."})
+    print(f"[spin-out] unexpected error: {error}", file=sys.stderr)
+    return JSONResponse(status_code=500, content={"success": False, "error": "Internal server error."})
 
 
 @app.get("/health")
@@ -1161,29 +1212,8 @@ async def blackjack_start(payload: BlackjackStartRequest, user: AuthUser = Depen
 
 @app.post("/api/games/blackjack/action")
 async def blackjack_action(payload: BlackjackActionRequest, user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
-    game = load_blackjack_game(user.user_id)
-    if not game:
-        raise AppError("No blackjack game in progress.", status.HTTP_404_NOT_FOUND)
-    if payload.action == "hit":
-        result = blackjack_hit(game["state"], game["deck"])
-    elif payload.action == "stand":
-        result = blackjack_stand(game["state"], game["deck"])
-    else:
-        update_user_balance(user.user_id, -game["state"]["bet"] if game["currency"] == "SC" else 0, -game["state"]["bet"] if game["currency"] == "GC" else 0)
-        result = blackjack_double(game["state"], game["deck"])
-    payout = calculate_blackjack_payout(result["state"])
-    profile = find_user_by_id(user.user_id)
-    if result["state"]["status"] != "playing":
-        delete_blackjack_game(user.user_id)
-        if payout > 0:
-            update_user_balance(user.user_id, payout if game["currency"] == "SC" else 0, payout if game["currency"] == "GC" else 0)
-            if profile:
-                await record_win(profile["id"], profile["username"], max(0.0, round(payout - result["state"]["bet"], 2)))
-        create_game_session(user.user_id, "blackjack", result["state"]["bet"], game["currency"], result["state"]["status"], payout, metadata=result["state"])
-        record_transaction(user.user_id, "win" if payout > result["state"]["bet"] else "loss", payout if payout > 0 else result["state"]["bet"], game["currency"], {"game": "blackjack", "status": result["state"]["status"]})
-    else:
-        save_blackjack_game(user.user_id, result["state"], result["deck"], game["currency"])
-    return {"success": True, "data": {**result["state"], "payout": payout}}
+    result = await settle_blackjack_action(user.user_id, payload.action)
+    return {"success": True, "data": {**result["state"], "payout": result["payout"]}}
 
 
 @app.post("/api/games/roulette/spin")
@@ -1238,6 +1268,8 @@ async def cashapp_create_payment(payload: PaymentRequest, user: AuthUser = Depen
 async def cashapp_webhook(payload: PaymentWebhookRequest, request: Request) -> dict[str, Any]:
     signature = request.headers.get("x-cashapp-signature", "")
     secret = os.getenv("CASHAPP_WEBHOOK_SECRET", "")
+    if not secret:
+        raise AppError("CashApp webhook secret is not configured.", status.HTTP_503_SERVICE_UNAVAILABLE)
     body = (await request.body()).decode() or json_data(payload.model_dump())
     if not signature or not verify_webhook_signature(body, signature, secret):
         raise AppError("Invalid webhook signature.", status.HTTP_401_UNAUTHORIZED)
@@ -1255,7 +1287,7 @@ async def weekly_leaderboard() -> dict[str, Any]:
 
 
 @app.post("/api/leaderboard/record-win")
-async def leaderboard_record_win(payload: RecordWinRequest) -> dict[str, Any]:
+async def leaderboard_record_win(payload: RecordWinRequest, _user: AuthUser = Depends(require_admin)) -> dict[str, Any]:
     await record_win(payload.userId, payload.username, payload.amount)
     return {"success": True, "message": "Win recorded."}
 
@@ -1289,11 +1321,16 @@ async def connect(sid: str, environ: dict[str, Any], auth: dict[str, Any] | None
 
 @sio.on("join-game")
 async def join_game(sid: str, room: str) -> None:
+    if room != "leaderboard":
+        await sio.emit("error-message", {"message": "Unsupported room."}, to=sid)
+        return
     await sio.enter_room(sid, room)
 
 
 @sio.on("leave-game")
 async def leave_game(sid: str, room: str) -> None:
+    if room != "leaderboard":
+        return
     await sio.leave_room(sid, room)
 
 
@@ -1302,7 +1339,6 @@ async def socket_slot_spin(sid: str, data: dict[str, Any]) -> dict[str, Any]:
     bet = float(data.get("bet", MIN_BET))
     client_seed = str(data.get("clientSeed", "socket"))
     nonce = int(data.get("nonce", 0))
-    currency = data.get("currency", "GC")
     result = spin_slots(bet, generate_server_seed(), client_seed, nonce)
     await sio.emit("slot:result", result, to=sid)
     if result["winAmount"] > 0:
@@ -1316,19 +1352,15 @@ async def socket_blackjack_action(sid: str, data: dict[str, Any]) -> dict[str, A
     auth_user = session.get("user")
     if not auth_user:
         return {"success": False, "error": "Unauthorized socket user."}
-    game = load_blackjack_game(auth_user["userId"])
-    if not game:
-        return {"success": False, "error": "No blackjack game found."}
     action = data.get("action")
-    if action == "hit":
-        result = blackjack_hit(game["state"], game["deck"])
-    elif action == "double":
-        result = blackjack_double(game["state"], game["deck"])
-    else:
-        result = blackjack_stand(game["state"], game["deck"])
-    save_blackjack_game(auth_user["userId"], result["state"], result["deck"], game["currency"])
-    await sio.emit("blackjack:update", result["state"], to=sid)
-    return {"success": True, "data": result["state"]}
+    if action not in {"hit", "stand", "double"}:
+        return {"success": False, "error": "Invalid blackjack action."}
+    try:
+        result = await settle_blackjack_action(auth_user["userId"], action)
+    except AppError as error:
+        return {"success": False, "error": error.message}
+    await sio.emit("blackjack:update", {**result["state"], "payout": result["payout"]}, to=sid)
+    return {"success": True, "data": {**result["state"], "payout": result["payout"]}}
 
 
 @sio.on("roulette:bet")
@@ -1355,9 +1387,16 @@ async def root_index():
 
 @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
 async def spa_assets(full_path: str):
-    if full_path.startswith("api") or full_path.startswith("socket.io") or full_path == "health":
+    parts = Path(full_path).parts
+    top_level = parts[0] if parts else ""
+    if top_level in {"api", "socket.io", "health"}:
         raise HTTPException(status_code=404, detail="Not found.")
-    candidate = DIST_DIR / full_path
+    if Path(full_path).is_absolute() or ".." in parts:
+        raise HTTPException(status_code=404, detail="Not found.")
+    candidate = (DIST_DIR / Path(full_path)).resolve()
+    dist_root = DIST_DIR.resolve()
+    if candidate != dist_root and dist_root not in candidate.parents:
+        raise HTTPException(status_code=404, detail="Not found.")
     if candidate.is_file():
         return FileResponse(candidate)
     index_file = DIST_DIR / "index.html"

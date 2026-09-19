@@ -51,7 +51,7 @@ Spin Out now includes a self-contained Python runtime that serves the API, leade
 
 ### Requirements
 - Python 3.11+
-- Existing frontend bundle in `/home/runner/work/Forreal/Forreal/spin-out/client/dist`
+- A built frontend bundle at `spin-out/client/dist` (the repository already includes one)
 
 ### Launch on Termux
 
