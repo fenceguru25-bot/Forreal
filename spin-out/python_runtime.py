@@ -76,6 +76,7 @@ ALLOWED_ORIGINS = [
 ]
 
 DB_LOCK = threading.RLock()
+STATIC_FILE_INDEX: dict[str, Path] = {}
 
 
 class AppError(Exception):
@@ -148,6 +149,7 @@ class PaymentRequest(BaseModel):
 class PaymentWebhookRequest(BaseModel):
     userId: str
     packageId: str
+    eventId: str | None = None
 
 
 class RecordWinRequest(BaseModel):
@@ -212,6 +214,18 @@ def db_connection() -> Iterator[sqlite3.Connection]:
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+def refresh_static_index() -> None:
+    global STATIC_FILE_INDEX
+    if DIST_DIR.exists():
+        STATIC_FILE_INDEX = {
+            path.relative_to(DIST_DIR).as_posix(): path
+            for path in DIST_DIR.rglob("*")
+            if path.is_file()
+        }
+    else:
+        STATIC_FILE_INDEX = {}
 
 
 def now_iso() -> str:
@@ -292,6 +306,11 @@ def init_db() -> None:
               username TEXT NOT NULL,
               amount REAL NOT NULL DEFAULT 0,
               PRIMARY KEY (period, period_key, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS processed_webhooks (
+              event_id TEXT PRIMARY KEY,
+              created_at TEXT NOT NULL
             );
             """
         )
@@ -1054,6 +1073,15 @@ async def settle_blackjack_action(user_id: str, action: Literal["hit", "stand", 
     return {"currency": game["currency"], "state": result["state"], "payout": payout}
 
 
+def mark_webhook_processed(event_id: str) -> bool:
+    with db_connection() as connection:
+        existing = connection.execute("SELECT event_id FROM processed_webhooks WHERE event_id = ? LIMIT 1", (event_id,)).fetchone()
+        if existing:
+            return False
+        connection.execute("INSERT INTO processed_webhooks (event_id, created_at) VALUES (?, ?)", (event_id, now_iso()))
+    return True
+
+
 def auth_from_header(authorization: str | None) -> AuthUser:
     if not authorization or not authorization.startswith("Bearer "):
         raise AppError("Authorization token is required.", status.HTTP_401_UNAUTHORIZED)
@@ -1074,6 +1102,7 @@ def require_admin(user: AuthUser = Depends(require_auth)) -> AuthUser:
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> Iterator[None]:
     init_db()
+    refresh_static_index()
     yield
 
 
@@ -1148,8 +1177,10 @@ async def refresh(payload: RefreshRequest) -> dict[str, Any]:
 
 
 @app.post("/api/auth/logout")
-async def logout(payload: LogoutRequest) -> dict[str, Any]:
-    delete_refresh_token(payload.userId)
+async def logout(payload: LogoutRequest, user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
+    if payload.userId != user.user_id:
+        raise AppError("Cannot revoke another user's session.", status.HTTP_403_FORBIDDEN)
+    delete_refresh_token(user.user_id)
     return {"success": True, "message": "Logged out successfully."}
 
 
@@ -1206,6 +1237,14 @@ async def blackjack_start(payload: BlackjackStartRequest, user: AuthUser = Depen
         raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
     update_user_balance(profile["id"], -payload.bet if payload.currency == "SC" else 0, -payload.bet if payload.currency == "GC" else 0)
     game = start_blackjack_game(payload.bet)
+    if game["state"]["status"] != "playing":
+        payout = calculate_blackjack_payout(game["state"])
+        if payout > 0:
+            update_user_balance(profile["id"], payout if payload.currency == "SC" else 0, payout if payload.currency == "GC" else 0)
+            await record_win(profile["id"], profile["username"], max(0.0, round(payout - game["state"]["bet"], 2)))
+        create_game_session(profile["id"], "blackjack", game["state"]["bet"], payload.currency, game["state"]["status"], payout, metadata=game["state"])
+        record_transaction(profile["id"], "win" if payout > game["state"]["bet"] else "loss", payout if payout > 0 else game["state"]["bet"], payload.currency, {"game": "blackjack", "status": game["state"]["status"]})
+        return {"success": True, "data": {**game["state"], "payout": payout}}
     save_blackjack_game(profile["id"], game["state"], game["deck"], payload.currency)
     return {"success": True, "data": game["state"]}
 
@@ -1219,8 +1258,8 @@ async def blackjack_action(payload: BlackjackActionRequest, user: AuthUser = Dep
 @app.post("/api/games/roulette/spin")
 async def roulette_spin(payload: RouletteSpinRequest, user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
     profile = find_user_by_id(user.user_id)
-    if not profile:
-        raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
+    if not profile or profile["selfExcluded"]:
+        raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
     bets = [bet.model_dump() for bet in payload.bets]
     total_bet = round(sum(float(bet["amount"]) for bet in bets), 2)
     update_user_balance(profile["id"], -total_bet if payload.currency == "SC" else 0, -total_bet if payload.currency == "GC" else 0)
@@ -1236,8 +1275,8 @@ async def roulette_spin(payload: RouletteSpinRequest, user: AuthUser = Depends(r
 @app.post("/api/games/baccarat/deal")
 async def baccarat_deal(payload: BaccaratDealRequest, user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
     profile = find_user_by_id(user.user_id)
-    if not profile:
-        raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
+    if not profile or profile["selfExcluded"]:
+        raise AppError("Unable to play games on this account.", status.HTTP_403_FORBIDDEN)
     update_user_balance(profile["id"], -payload.amount if payload.currency == "SC" else 0, -payload.amount if payload.currency == "GC" else 0)
     result = deal_baccarat()
     payout = calculate_baccarat_payout(payload.bet, result["winner"], payload.amount)
@@ -1273,6 +1312,11 @@ async def cashapp_webhook(payload: PaymentWebhookRequest, request: Request) -> d
     body = (await request.body()).decode() or json_data(payload.model_dump())
     if not signature or not verify_webhook_signature(body, signature, secret):
         raise AppError("Invalid webhook signature.", status.HTTP_401_UNAUTHORIZED)
+    event_id = payload.eventId or request.headers.get("x-cashapp-event-id", "").strip()
+    if not event_id:
+        raise AppError("CashApp webhook event id is required.")
+    if not mark_webhook_processed(event_id):
+        return {"success": True, "message": "Webhook already processed."}
     return {"success": True, "data": process_payment(payload.userId, payload.packageId)}
 
 
@@ -1323,6 +1367,10 @@ async def connect(sid: str, environ: dict[str, Any], auth: dict[str, Any] | None
 async def join_game(sid: str, room: str) -> None:
     if room != "leaderboard":
         await sio.emit("error-message", {"message": "Unsupported room."}, to=sid)
+        return
+    session = await sio.get_session(sid)
+    if not session.get("user"):
+        await sio.emit("error-message", {"message": "Authentication required for leaderboard room."}, to=sid)
         return
     await sio.enter_room(sid, room)
 
@@ -1375,13 +1423,18 @@ async def socket_roulette_bet(sid: str, data: dict[str, Any]) -> dict[str, Any]:
 
 @sio.on("leaderboard:subscribe")
 async def leaderboard_subscribe(sid: str) -> None:
+    session = await sio.get_session(sid)
+    if not session.get("user"):
+        await sio.emit("error-message", {"message": "Authentication required for leaderboard room."}, to=sid)
+        return
     await sio.enter_room(sid, "leaderboard")
 
 
 @app.get("/", include_in_schema=False, response_model=None)
 async def root_index():
-    if DIST_DIR.joinpath("index.html").exists():
-        return FileResponse(DIST_DIR / "index.html")
+    index_file = STATIC_FILE_INDEX.get("index.html")
+    if index_file and index_file.exists():
+        return FileResponse(index_file)
     return JSONResponse(status_code=503, content={"success": False, "error": "Frontend bundle not found. Build the client first."})
 
 
@@ -1391,16 +1444,13 @@ async def spa_assets(full_path: str):
     top_level = parts[0] if parts else ""
     if top_level in {"api", "socket.io", "health"}:
         raise HTTPException(status_code=404, detail="Not found.")
-    if Path(full_path).is_absolute() or ".." in parts:
+    if Path(full_path).is_absolute() or ".." in parts or any(part.startswith(".") for part in parts):
         raise HTTPException(status_code=404, detail="Not found.")
-    candidate = (DIST_DIR / Path(full_path)).resolve()
-    dist_root = DIST_DIR.resolve()
-    if candidate != dist_root and dist_root not in candidate.parents:
-        raise HTTPException(status_code=404, detail="Not found.")
-    if candidate.is_file():
+    candidate = STATIC_FILE_INDEX.get(Path(full_path).as_posix())
+    if candidate and candidate.is_file():
         return FileResponse(candidate)
-    index_file = DIST_DIR / "index.html"
-    if index_file.exists():
+    index_file = STATIC_FILE_INDEX.get("index.html")
+    if index_file and index_file.exists():
         return FileResponse(index_file)
     return JSONResponse(status_code=503, content={"success": False, "error": "Frontend bundle not found. Build the client first."})
 
