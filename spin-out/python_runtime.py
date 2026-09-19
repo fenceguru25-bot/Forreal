@@ -1012,10 +1012,13 @@ def claim_daily_bonus(user_id: str) -> dict[str, Any]:
 
 
 def create_payment_request(user_id: str, package_id: str, amount: float) -> dict[str, Any]:
+    package = next((item for item in COIN_PACKAGES if item["id"] == package_id), None)
+    if not package:
+        raise AppError("Invalid coin package.")
     return {
-        "paymentUrl": f"https://cash.app/{CASHAPP_CASHTAG}/{amount:.2f}",
+        "paymentUrl": f"https://cash.app/{CASHAPP_CASHTAG}/{float(package['price']):.2f}",
         "requestId": str(uuid4()),
-        "metadata": {"userId": user_id, "packageId": package_id},
+        "metadata": {"userId": user_id, "packageId": package_id, "requestedAmount": amount},
     }
 
 
@@ -1080,6 +1083,46 @@ def mark_webhook_processed(event_id: str) -> bool:
             return False
         connection.execute("INSERT INTO processed_webhooks (event_id, created_at) VALUES (?, ?)", (event_id, now_iso()))
     return True
+
+
+def process_payment_webhook(event_id: str, user_id: str, package_id: str) -> dict[str, Any] | None:
+    package = next((item for item in COIN_PACKAGES if item["id"] == package_id), None)
+    if not package:
+        raise AppError("Invalid coin package.")
+    with db_connection() as connection:
+        existing = connection.execute("SELECT event_id FROM processed_webhooks WHERE event_id = ? LIMIT 1", (event_id,)).fetchone()
+        if existing:
+            return None
+        user_row = connection.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+        if not user_row:
+            raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
+        sweeps = round(float(user_row["sweeps_coins"]) + float(package["sweepsCoins"]), 2)
+        gold = round(float(user_row["gold_coins"]) + float(package["goldCoins"]), 2)
+        timestamp = now_iso()
+        connection.execute(
+            "UPDATE users SET sweeps_coins = ?, gold_coins = ?, updated_at = ? WHERE id = ?",
+            (sweeps, gold, timestamp, user_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO transactions (id, user_id, type, amount, currency, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                user_id,
+                "purchase",
+                float(package["price"]),
+                "GC",
+                json_data({"packageId": package_id, "goldCoins": package["goldCoins"], "sweepsCoins": package["sweepsCoins"]}),
+                timestamp,
+            ),
+        )
+        connection.execute("INSERT INTO processed_webhooks (event_id, created_at) VALUES (?, ?)", (event_id, timestamp))
+        updated_row = connection.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+    if not updated_row:
+        raise AppError("User not found.", status.HTTP_404_NOT_FOUND)
+    return row_to_user(updated_row)
 
 
 def auth_from_header(authorization: str | None) -> AuthUser:
@@ -1180,6 +1223,8 @@ async def refresh(payload: RefreshRequest) -> dict[str, Any]:
 async def logout(payload: LogoutRequest, user: AuthUser = Depends(require_auth)) -> dict[str, Any]:
     if payload.userId != user.user_id:
         raise AppError("Cannot revoke another user's session.", status.HTTP_403_FORBIDDEN)
+    if not payload.refreshToken or not verify_refresh_token(user.user_id, payload.refreshToken):
+        raise AppError("Refresh token is invalid.", status.HTTP_401_UNAUTHORIZED)
     delete_refresh_token(user.user_id)
     return {"success": True, "message": "Logged out successfully."}
 
@@ -1315,9 +1360,10 @@ async def cashapp_webhook(payload: PaymentWebhookRequest, request: Request) -> d
     event_id = payload.eventId or request.headers.get("x-cashapp-event-id", "").strip()
     if not event_id:
         raise AppError("CashApp webhook event id is required.")
-    if not mark_webhook_processed(event_id):
+    processed = process_payment_webhook(event_id, payload.userId, payload.packageId)
+    if processed is None:
         return {"success": True, "message": "Webhook already processed."}
-    return {"success": True, "data": process_payment(payload.userId, payload.packageId)}
+    return {"success": True, "data": processed}
 
 
 @app.get("/api/leaderboard/daily")
@@ -1382,18 +1428,6 @@ async def leave_game(sid: str, room: str) -> None:
     await sio.leave_room(sid, room)
 
 
-@sio.on("slot:spin")
-async def socket_slot_spin(sid: str, data: dict[str, Any]) -> dict[str, Any]:
-    bet = float(data.get("bet", MIN_BET))
-    client_seed = str(data.get("clientSeed", "socket"))
-    nonce = int(data.get("nonce", 0))
-    result = spin_slots(bet, generate_server_seed(), client_seed, nonce)
-    await sio.emit("slot:result", result, to=sid)
-    if result["winAmount"] > 0:
-        await sio.emit("win-animation", {"type": "slots", "amount": result["winAmount"], "multiplier": result["multiplier"]}, to=sid)
-    return result
-
-
 @sio.on("blackjack:action")
 async def socket_blackjack_action(sid: str, data: dict[str, Any]) -> dict[str, Any]:
     session = await sio.get_session(sid)
@@ -1409,16 +1443,6 @@ async def socket_blackjack_action(sid: str, data: dict[str, Any]) -> dict[str, A
         return {"success": False, "error": error.message}
     await sio.emit("blackjack:update", {**result["state"], "payout": result["payout"]}, to=sid)
     return {"success": True, "data": {**result["state"], "payout": result["payout"]}}
-
-
-@sio.on("roulette:bet")
-async def socket_roulette_bet(sid: str, data: dict[str, Any]) -> dict[str, Any]:
-    bets = data.get("bets") or []
-    result = spin_roulette(bets)
-    await sio.emit("roulette:result", result, to=sid)
-    if result["win"]:
-        await sio.emit("win-animation", {"type": "roulette", "amount": result["winAmount"], "multiplier": result["winAmount"]}, to=sid)
-    return result
 
 
 @sio.on("leaderboard:subscribe")
