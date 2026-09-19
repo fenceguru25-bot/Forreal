@@ -45,6 +45,39 @@ docker compose up --build
 # Health:   http://localhost:4000/health
 ```
 
+## Python Runtime (Termux-friendly)
+
+Spin Out now includes a self-contained Python runtime that serves the API, leaderboard socket, SQLite storage, and the prebuilt frontend without Node.js, PostgreSQL, or Redis.
+
+### Requirements
+- Python 3.11+
+- Existing frontend bundle in `/home/runner/work/Forreal/Forreal/spin-out/client/dist`
+
+### Launch on Termux
+
+```bash
+cd /data/data/com.termux/files/home/Forreal/spin-out
+chmod +x termux-launch.sh
+./termux-launch.sh
+```
+
+The launcher:
+- creates `.venv/`
+- installs `requirements-python.txt`
+- creates `data/spin_out.db`
+- starts the app on `http://127.0.0.1:4000`
+
+### Optional environment variables
+
+```bash
+export PORT=4000
+export HOST=0.0.0.0
+export JWT_SECRET=change-me
+export REFRESH_TOKEN_SECRET=change-me-too
+export CASHAPP_WEBHOOK_SECRET=change-me-three
+export SPIN_OUT_ADMIN_EMAILS=admin@example.com
+```
+
 ## Development Setup
 
 ### Prerequisites

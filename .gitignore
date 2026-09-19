@@ -32,3 +32,9 @@ google-services.json
 
 # Android Profiling
 *.hprof
+
+# Python / Termux runtime artifacts
+spin-out/.venv/
+spin-out/__pycache__/
+spin-out/data/
+*.pyc
