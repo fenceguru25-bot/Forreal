@@ -9,7 +9,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from contextlib import closing, contextmanager
+from contextlib import asynccontextmanager, closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1021,7 +1021,13 @@ def require_admin(user: AuthUser = Depends(require_auth)) -> AuthUser:
     return user
 
 
-app = FastAPI(title="Spin Out Python Runtime")
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> Iterator[None]:
+    init_db()
+    yield
+
+
+app = FastAPI(title="Spin Out Python Runtime", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -1031,11 +1037,6 @@ app.add_middleware(
 )
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=ALLOWED_ORIGINS)
 socket_app = socketio.ASGIApp(sio, other_asgi_app=app, socketio_path="socket.io")
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    init_db()
 
 
 @app.exception_handler(AppError)
@@ -1345,15 +1346,15 @@ async def leaderboard_subscribe(sid: str) -> None:
     await sio.enter_room(sid, "leaderboard")
 
 
-@app.get("/", include_in_schema=False)
-async def root_index() -> FileResponse | JSONResponse:
+@app.get("/", include_in_schema=False, response_model=None)
+async def root_index():
     if DIST_DIR.joinpath("index.html").exists():
         return FileResponse(DIST_DIR / "index.html")
     return JSONResponse(status_code=503, content={"success": False, "error": "Frontend bundle not found. Build the client first."})
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
-async def spa_assets(full_path: str) -> FileResponse | JSONResponse:
+@app.get("/{full_path:path}", include_in_schema=False, response_model=None)
+async def spa_assets(full_path: str):
     if full_path.startswith("api") or full_path.startswith("socket.io") or full_path == "health":
         raise HTTPException(status_code=404, detail="Not found.")
     candidate = DIST_DIR / full_path
