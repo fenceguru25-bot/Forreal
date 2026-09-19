@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import http from 'http';
 import cors from 'cors';
+import type { CorsOptions } from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -19,15 +20,15 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL ?? 'http://localhost:5173',
-    credentials: true
-  }
-});
+const clientOrigin = process.env.CLIENT_URL ?? 'http://localhost:5173';
+const socketCorsOptions: CorsOptions = {
+  origin: clientOrigin,
+  credentials: true
+};
+const io = new Server(server, { cors: socketCorsOptions } as ConstructorParameters<typeof Server>[1]);
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL ?? 'http://localhost:5173', credentials: true }));
+app.use(cors(socketCorsOptions));
 app.use(morgan('dev'));
 app.use(express.json({
   verify: (req, _res, buffer) => {
