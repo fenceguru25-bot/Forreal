@@ -34,6 +34,10 @@ class PythonRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(daily[0]["rank"], 1)
         self.assertEqual(weekly[0]["rank"], 1)
         self.assertGreaterEqual(emit_mock.await_count, 2)
+        emitted_payload = emit_mock.await_args_list[-1].args[1]
+        self.assertEqual(emitted_payload["daily"][0]["amount"], 3.5)
+        self.assertEqual(emitted_payload["weekly"][0]["amount"], 3.5)
+        self.assertEqual(emitted_payload["username"], "tester")
 
     def test_create_payment_request_uses_package_price(self) -> None:
         payment = python_runtime.create_payment_request(self.user_id, "diamond", 0.01)

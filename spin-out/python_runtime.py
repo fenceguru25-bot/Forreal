@@ -199,7 +199,7 @@ class BaccaratDealRequest(BaseModel):
 
 @contextmanager
 def db_connection() -> Iterator[sqlite3.Connection]:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with DB_LOCK:
         with closing(sqlite3.connect(DB_PATH, check_same_thread=False)) as connection:
             connection.row_factory = sqlite3.Row
@@ -453,7 +453,14 @@ def start_blackjack_game(bet: float) -> dict[str, Any]:
         "canDouble": True,
     }
     if state["playerScore"] == 21 or state["dealerScore"] == 21:
-        return {"state": determine_blackjack_winner(state), "deck": deck}
+        if state["playerScore"] == 21 and state["dealerScore"] == 21:
+            state["status"] = "push"
+        elif state["playerScore"] == 21:
+            state["status"] = "player_win"
+        else:
+            state["status"] = "dealer_win"
+        state["canDouble"] = False
+        return {"state": state, "deck": deck}
     return {"state": state, "deck": deck}
 
 
@@ -965,7 +972,14 @@ async def record_win(user_id: str, username: str, amount: float) -> None:
                 """,
                 (period, period_key, user_id, username, rounded_amount),
             )
-    await sio.emit("leaderboard:update", {"userId": user_id, "username": username, "amount": rounded_amount}, room="leaderboard")
+    payload = {
+        "userId": user_id,
+        "username": username,
+        "amount": rounded_amount,
+        "daily": leaderboard("daily"),
+        "weekly": leaderboard("weekly"),
+    }
+    await sio.emit("leaderboard:update", payload, room="leaderboard")
 
 
 def leaderboard(period: Literal["daily", "weekly"]) -> list[dict[str, Any]]:
@@ -1474,6 +1488,8 @@ async def spa_assets(full_path: str) -> Response:
     candidate = STATIC_FILE_INDEX.get(Path(full_path).as_posix())
     if candidate and candidate.is_file():
         return FileResponse(candidate)
+    if Path(full_path).suffix:
+        raise HTTPException(status_code=404, detail="Not found.")
     index_file = STATIC_FILE_INDEX.get("index.html")
     if index_file and index_file.exists():
         return FileResponse(index_file)
